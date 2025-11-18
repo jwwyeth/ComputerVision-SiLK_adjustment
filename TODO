@@ -1,8 +1,12 @@
 TODO List:
 
 -scale input image in test_matches.py at different and see how accraute it is
+      - instead of passing a single-resoution image to SiLK, create multiple scaled versions of each image
+      - for each image run silk on all sclaes and collect keypoints/descriptors
+      - run it through variations of the second image ie. img0 is base img1 is img0 but skewed
+      - if more time train it in this manner?/ run it on other datasets?
 -write out report ~7 pages
 - create slideshow
 - github needs docmentation of method/code/readme
 - judge by accuracy, time, number of keypoints, error
-    - run it on rotated image, translated image, chamfer image
+    - run it on rotated image, translated image, chamfer (geometric shape) image
