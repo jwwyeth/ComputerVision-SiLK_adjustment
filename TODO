@@ -1,1 +1,8 @@
+TODO List:
 
+-scale input image in test_matches.py at different and see how accraute it is
+-write out report ~7 pages
+- create slideshow
+- github needs docmentation of method/code/readme
+- judge by accuracy, time, number of keypoints, error
+    - run it on rotated image, translated image, chamfer image
