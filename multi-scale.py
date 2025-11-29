@@ -32,20 +32,16 @@ def to_gray(img):
         return cv.cvtColor(img, cv.COLOR_BGR2GRAY)
     return img
 
-# --- Convert image to proper 4D tensor ---
+# --- Convert image to proper 4D tensor for model (grayscale) ---
 def prep_image_tensor(img):
-    tensor = silk.utils.img_to_tensor(img, device=device, normalization=True)
-    # Ensure C x H x W
-    if tensor.ndim == 3:
-        tensor = tensor.permute(2, 0, 1)
-    # Add batch dim N x C x H x W
-    if tensor.ndim == 3:
+    img_gray = to_gray(img)
+    tensor = torch.from_numpy(img_gray).float()
+    # Add channel dim (C=1)
+    if tensor.ndim == 2:  # H x W
         tensor = tensor.unsqueeze(0)
-    elif tensor.ndim > 4:
-        tensor = tensor.squeeze()
-        if tensor.ndim == 3:
-            tensor = tensor.unsqueeze(0)
-    return tensor
+    # Add batch dim N x C x H x W
+    tensor = tensor.unsqueeze(0)
+    return tensor.to(device)
 
 # --- Match base image to a scaled version of img1 ---
 def match_base_to_scaled(base_img, target_img, scale=1.0, top_k=20):
