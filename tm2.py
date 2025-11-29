@@ -33,7 +33,11 @@ def create_image_pyramid(img, scales=[1.0]):
         h, w = img.shape[:2]
         new_h, new_w = int(h * scale), int(w * scale)
         resized = cv.resize(img, (new_w, new_h))
-        gray = cv.cvtColor(resized, cv.COLOR_BGR2GRAY)
+        # Convert to grayscale only if it's a color image
+        if resized.ndim == 3 and resized.shape[2] == 3:
+            gray = cv.cvtColor(resized, cv.COLOR_BGR2GRAY)
+        else:
+            gray = resized
         pyramid.append((gray, scale))
     return pyramid
 
@@ -109,11 +113,14 @@ if __name__ == "__main__":
     if img0 is None or img1 is None:
         raise FileNotFoundError("One of the input images could not be loaded.")
 
-    # Downscale and grayscale for VM safety
+    # Downscale for VM safety
     img0 = cv.resize(img0, (320, 240))
-    img0 = cv.cvtColor(img0, cv.COLOR_BGR2GRAY)
+    if img0.ndim == 3 and img0.shape[2] == 3:
+        img0 = cv.cvtColor(img0, cv.COLOR_BGR2GRAY)
+
     img1 = cv.resize(img1, (320, 240))
-    img1 = cv.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    if img1.ndim == 3 and img1.shape[2] == 3:
+        img1 = cv.cvtColor(img1, cv.COLOR_BGR2GRAY)
 
     # Create pyramid for img1
     pyramid = create_image_pyramid(img1, scales=[1.0, 0.75, 0.5])
