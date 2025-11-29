@@ -17,15 +17,11 @@ model.load_state_dict(torch.load("./train0_25000.pth"))
 # --- Adjusted get_topk ---
 def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=100):
     height, width = ktps.shape[2:4]
-
-    # --- FIX 1: Correct flattening ---
     kpts_map = torch.sigmoid(ktps).squeeze(0).squeeze(0)  # [H, W]
     kpts_map = kpts_map.reshape(height * width)
-
     desc_map = desc.squeeze(0).reshape(desc.shape[1], height * width)
     topk_value, topk_indice = kpts_map.topk(k)
     topk_desc = desc_map[:, topk_indice]
-
     return topk_value, topk_desc, topk_indice
 
 # --- Adjusted match_two ---
@@ -38,7 +34,6 @@ def match_two(img0: torch.Tensor, img1: torch.Tensor):
 
     topk_desc0 = topk_desc0.permute(1, 0)
     topk_desc1 = topk_desc1.permute(1, 0)
-
     topk_desc0 = topk_desc0 / torch.norm(topk_desc0, p=2, dim=1, keepdim=True)
     topk_desc1 = topk_desc1 / torch.norm(topk_desc1, p=2, dim=1, keepdim=True)
 
@@ -52,20 +47,17 @@ def match_two(img0: torch.Tensor, img1: torch.Tensor):
         j = sim_indice[i].item()
         hw_pairs.append([
             int(sim_max[i] * 1000),
-            topk_indice0[i] // width,  # row
-            topk_indice0[i] % width,   # col
+            topk_indice0[i] // width,
+            topk_indice0[i] % width,
             topk_indice1[j] // width,
             topk_indice1[j] % width,
         ])
-
     return torch.tensor(hw_pairs, dtype=torch.int32)
 
-# --- Draw matches with scaling back to original image size ---
+# --- Draw matches ---
 def draw_matches(scaled_img_cv, orig_img_cv, hw_pairs):
-    # --- FIX 2: Scale coordinates back to original image size ---
     scale_x = orig_img_cv.shape[1] / 160
     scale_y = orig_img_cv.shape[0] / 120
-
     img_draw = orig_img_cv.copy()
     for score, h0, w0, h1, w1 in hw_pairs:
         x_up = int(w0.item() * scale_x)
@@ -74,53 +66,35 @@ def draw_matches(scaled_img_cv, orig_img_cv, hw_pairs):
     return img_draw
 
 # --- Paths ---
-base_dir = os.path.join("..", "archive")
-transformed_dir = os.path.join(base_dir, "transformed")
-coco_imgs_dir = os.path.join(base_dir, "images")
-output_dir = os.path.join("..", "matches_found")
+base_dir = "/home/jack/Desktop/archive"
+scaled_img_path = os.path.join(base_dir, "transformed/example_scaled.jpg")
+orig_img_path = os.path.join(base_dir, "images/example_original.jpg")
+output_dir = os.path.join(base_dir, "matches_found")
 os.makedirs(output_dir, exist_ok=True)
 
 # --- Load images ---
-scaled_imgs = [os.path.join(transformed_dir, f) for f in os.listdir(transformed_dir) if f.endswith(".jpg")]
-coco_imgs = [os.path.join(coco_imgs_dir, f) for f in os.listdir(coco_imgs_dir) if f.endswith(".jpg")]
+scaled_img_cv = cv.imread(scaled_img_path)
+orig_img_cv = cv.imread(orig_img_path)
 
-# --- Convert images to tensors ---
-scaled_images_tensor = []
-images_cv = []
-for path in scaled_imgs:
-    img_cv = cv.imread(path)
-    img_gray = cv.cvtColor(cv.resize(img_cv, (160, 120)), cv.COLOR_BGR2GRAY)
-    img_tensor = silk.utils.img_to_tensor(img_gray, device=device, normalization=True)
-    scaled_images_tensor.append(img_tensor)
-    images_cv.append(img_cv)
+scaled_gray = cv.cvtColor(cv.resize(scaled_img_cv, (160, 120)), cv.COLOR_BGR2GRAY)
+orig_gray = cv.cvtColor(cv.resize(orig_img_cv, (160, 120)), cv.COLOR_BGR2GRAY)
 
-coco_images_tensor = []
-coco_images_cv = []
-for path in coco_imgs:
-    img_cv = cv.imread(path)
-    img_gray = cv.cvtColor(cv.resize(img_cv, (160, 120)), cv.COLOR_BGR2GRAY)
-    img_tensor = silk.utils.img_to_tensor(img_gray, device=device, normalization=True)
-    coco_images_tensor.append(img_tensor)
-    coco_images_cv.append(img_cv)
+scaled_tensor = silk.utils.img_to_tensor(scaled_gray, device=device, normalization=True)
+orig_tensor = silk.utils.img_to_tensor(orig_gray, device=device, normalization=True)
 
-# --- Start timing ---
+# --- Match and draw ---
 start_time = time.time()
+hw_pairs = match_two(scaled_tensor, orig_tensor)
 
-# --- Match images and save ---
-for i in range(len(scaled_images_tensor)):
-    hw_pairs = match_two(scaled_images_tensor[i], coco_images_tensor[i])
+img_scaled_draw = draw_matches(scaled_tensor, scaled_img_cv, hw_pairs)
+img_orig_draw = draw_matches(orig_tensor, orig_img_cv, hw_pairs)
 
-    img0_draw = draw_matches(scaled_images_tensor[i], images_cv[i], hw_pairs)
-    img1_draw = draw_matches(coco_images_tensor[i], coco_images_cv[i], hw_pairs)
+cv.imwrite(os.path.join(output_dir, "scaled_matches.jpg"), img_scaled_draw)
+cv.imwrite(os.path.join(output_dir, "original_matches.jpg"), img_orig_draw)
 
-    base0 = os.path.basename(scaled_imgs[i])
-    base1 = os.path.basename(coco_imgs[i])
-    cv.imwrite(os.path.join(output_dir, f"{base0}_matches.jpg"), img0_draw)
-    cv.imwrite(os.path.join(output_dir, f"{base1}_matches.jpg"), img1_draw)
-
-# --- End timing ---
 end_time = time.time()
 elapsed = end_time - start_time
 m = int(elapsed // 60)
 s = int(elapsed % 60)
+print(f"Matches saved to {output_dir}")
 print(f"Elapsed Time: {m} min {s} sec")
