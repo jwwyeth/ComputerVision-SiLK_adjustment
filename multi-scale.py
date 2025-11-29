@@ -32,6 +32,21 @@ def to_gray(img):
         return cv.cvtColor(img, cv.COLOR_BGR2GRAY)
     return img
 
+# --- Convert image to proper 4D tensor ---
+def prep_image_tensor(img):
+    tensor = silk.utils.img_to_tensor(img, device=device, normalization=True)
+    # Ensure C x H x W
+    if tensor.ndim == 3:
+        tensor = tensor.permute(2, 0, 1)
+    # Add batch dim N x C x H x W
+    if tensor.ndim == 3:
+        tensor = tensor.unsqueeze(0)
+    elif tensor.ndim > 4:
+        tensor = tensor.squeeze()
+        if tensor.ndim == 3:
+            tensor = tensor.unsqueeze(0)
+    return tensor
+
 # --- Match base image to a scaled version of img1 ---
 def match_base_to_scaled(base_img, target_img, scale=1.0, top_k=20):
     # Downscale target image
@@ -42,12 +57,8 @@ def match_base_to_scaled(base_img, target_img, scale=1.0, top_k=20):
     else:
         target_img_scaled = target_img.copy()
 
-    base_tensor = silk.utils.img_to_tensor(base_img, device=device, normalization=True)
-    if base_tensor.ndim == 3:
-        base_tensor = base_tensor.unsqueeze(0)
-    target_tensor = silk.utils.img_to_tensor(target_img_scaled, device=device, normalization=True)
-    if target_tensor.ndim == 3:
-        target_tensor = target_tensor.unsqueeze(0)
+    base_tensor = prep_image_tensor(base_img)
+    target_tensor = prep_image_tensor(target_img_scaled)
 
     # Forward pass
     base_kpts, base_desc, base_indice = get_topk(*model.forward(base_tensor), k=top_k)
