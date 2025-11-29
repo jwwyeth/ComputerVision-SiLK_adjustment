@@ -105,29 +105,24 @@ if __name__ == "__main__":
     if img0 is None or img1 is None:
         raise FileNotFoundError("One of the input images could not be loaded.")
 
-    # --- Downscale images for CPU ---
-    max_dim = 640  # max width or height
-    h0, w0 = img0.shape[:2]
-    scale0 = min(max_dim / h0, max_dim / w0, 1.0)
-    img0 = cv.resize(img0, (int(w0 * scale0), int(h0 * scale0)))
-
-    h1, w1 = img1.shape[:2]
-    scale1 = min(max_dim / h1, max_dim / w1, 1.0)
-    img1 = cv.resize(img1, (int(w1 * scale1), int(h1 * scale1)))
-
-    # Convert to grayscale if needed
-    img0 = to_gray(img0)
-    img1 = to_gray(img1)
-
-    # Process one scale at a time
-    scales = [1.0, 0.75, 0.5]
+    # --- Multi-resolution and multi-scale testing ---
+    resolutions = [320, 640, 1280]  # reference image resolutions
+    scales = [0.5, 1.0, 1.5, 2.0]  # target image scale variations
     all_hw_pairs = []
-    for scale in scales:
-        print(f"Matching scale {scale}")
-        pairs = match_base_to_scaled(img0, img1, scale=scale, top_k=20)
-        all_hw_pairs.append(pairs)
-        del pairs
-        torch.cuda.empty_cache()
+
+    for res in resolutions:
+        # Resize reference image
+        h0, w0 = img0.shape[:2]
+        scale_ref = res / max(h0, w0)
+        img0_res = cv.resize(img0, (int(w0*scale_ref), int(h0*scale_ref)))
+
+        for scale in scales:
+            print(f"Matching resolution {res} with scale {scale}")
+            pairs = match_base_to_scaled(img0_res, img1, scale=scale, top_k=20)
+            if pairs.numel() > 0:
+                all_hw_pairs.append(pairs)
+            del pairs
+            torch.cuda.empty_cache()
 
     hw_pairs = torch.cat(all_hw_pairs, dim=0) if all_hw_pairs else torch.empty((0,5), dtype=torch.int32)
 
