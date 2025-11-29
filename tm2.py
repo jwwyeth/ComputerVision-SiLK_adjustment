@@ -15,9 +15,8 @@ model.train(False)
 model.load_state_dict(torch.load("./train0_25000.pth"))
 
 # --- Extract top-k keypoints ---
-def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=100):
-    """Extract top-k keypoints and descriptors from SiLK output."""
-    if ktps.ndim == 5:  # adjust for extra batch dim
+def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=20):
+    if ktps.ndim == 5:
         ktps = ktps.squeeze(0)
         desc = desc.squeeze(0)
     height, width = ktps.shape[1:3]
@@ -27,8 +26,8 @@ def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=100):
     topk_desc = desc_map[:, topk_indice]
     return topk_value, topk_desc, topk_indice
 
-# --- Create multi-scale image pyramid ---
-def create_image_pyramid(img, scales=[1.0, 0.75, 0.5]):
+# --- Create image pyramid for img1 only ---
+def create_image_pyramid(img, scales=[1.0]):
     pyramid = []
     for scale in scales:
         h, w = img.shape[:2]
@@ -38,61 +37,49 @@ def create_image_pyramid(img, scales=[1.0, 0.75, 0.5]):
         pyramid.append((gray, scale))
     return pyramid
 
-# --- Multi-scale matching with timers ---
-def match_two_multiscale(img0, img1, scales=[1.0, 0.75, 0.5], top_k=200):
-    pyramid0 = create_image_pyramid(img0, scales)
-    pyramid1 = create_image_pyramid(img1, scales)
+# --- Match base image to pyramid of img1 ---
+def match_base_to_pyramid(base_img, img_pyramid, top_k=20):
     all_hw_pairs = []
 
-    for s0_idx, (gray0, scale0) in enumerate(pyramid0):
-        t0_scale0 = time.time()
-        img0_tensor = silk.utils.img_to_tensor(gray0, device=device, normalization=True)
-        if img0_tensor.ndim == 3:
-            img0_tensor = img0_tensor.unsqueeze(0)
+    # Prepare base image tensor once
+    base_tensor = silk.utils.img_to_tensor(base_img, device=device, normalization=True)
+    if base_tensor.ndim == 3:
+        base_tensor = base_tensor.unsqueeze(0)
+    print("Forward pass on base image...")
+    base_kpts, base_desc, base_indice = get_topk(*model.forward(base_tensor), k=top_k)
+    print("Base forward pass done")
 
-        for s1_idx, (gray1, scale1) in enumerate(pyramid1):
-            t0_scale1 = time.time()
-            img1_tensor = silk.utils.img_to_tensor(gray1, device=device, normalization=True)
-            if img1_tensor.ndim == 3:
-                img1_tensor = img1_tensor.unsqueeze(0)
+    base_desc = base_desc.permute(1, 0)
+    base_desc = base_desc / torch.norm(base_desc, p=2, dim=1, keepdim=True)
+    h0_dim, w0_dim = base_img.shape
 
-            t_forward0 = time.time()
-            topk_kpts0, topk_desc0, topk_indice0 = get_topk(*model.forward(img0_tensor), k=top_k)
-            print(f"Forward pass img0 scale {scale0:.2f} took {time.time() - t_forward0:.2f}s")
+    for gray, scale in img_pyramid:
+        print(f"Processing pyramid scale {scale:.2f}")
+        img_tensor = silk.utils.img_to_tensor(gray, device=device, normalization=True)
+        if img_tensor.ndim == 3:
+            img_tensor = img_tensor.unsqueeze(0)
 
-            t_forward1 = time.time()
-            topk_kpts1, topk_desc1, topk_indice1 = get_topk(*model.forward(img1_tensor), k=top_k)
-            print(f"Forward pass img1 scale {scale1:.2f} took {time.time() - t_forward1:.2f}s")
+        topk_kpts, topk_desc, topk_indice = get_topk(*model.forward(img_tensor), k=top_k)
+        topk_desc = topk_desc.permute(1, 0)
+        topk_desc = topk_desc / torch.norm(topk_desc, p=2, dim=1, keepdim=True)
+        h1_dim, w1_dim = gray.shape
 
-            # Normalize descriptors
-            t_norm = time.time()
-            topk_desc0 = topk_desc0.permute(1, 0)
-            topk_desc1 = topk_desc1.permute(1, 0)
-            topk_desc0 = topk_desc0 / torch.norm(topk_desc0, p=2, dim=1, keepdim=True)
-            topk_desc1 = topk_desc1 / torch.norm(topk_desc1, p=2, dim=1, keepdim=True)
-            print(f"Descriptor normalization took {time.time() - t_norm:.2f}s")
+        # Similarity
+        sim_mat = torch.matmul(base_desc, topk_desc.T)
+        sim_max, sim_indice = torch.max(sim_mat, dim=1)
 
-            # Similarity and matching
-            t_match = time.time()
-            sim_mat = torch.matmul(topk_desc0, topk_desc1.T)
-            sim_max, sim_indice = torch.max(sim_mat, dim=1)
+        for i in range(top_k):
+            if sim_max[i] < 0.7:
+                continue
+            j = sim_indice[i].item()
+            h0, w0 = base_indice[i] // w0_dim, base_indice[i] % w0_dim
+            h1, w1 = topk_indice[j] // w1_dim, topk_indice[j] % w1_dim
+            # Map to original resolution
+            h1_orig = int(h1 / scale)
+            w1_orig = int(w1 / scale)
+            all_hw_pairs.append([int(sim_max[i]*1000), h0, w0, h1_orig, w1_orig])
 
-            h0_dim, w0_dim = gray0.shape
-            h1_dim, w1_dim = gray1.shape
-
-            for i in range(top_k):
-                if sim_max[i] < 0.7:
-                    continue
-                j = sim_indice[i].item()
-                h0, w0 = topk_indice0[i] // w0_dim, topk_indice0[i] % w0_dim
-                h1, w1 = topk_indice1[j] // w1_dim, topk_indice1[j] % w1_dim
-                h0_orig = int(h0 / scale0)
-                w0_orig = int(w0 / scale0)
-                h1_orig = int(h1 / scale1)
-                w1_orig = int(w1 / scale1)
-                all_hw_pairs.append([int(sim_max[i]*1000), h0_orig, w0_orig, h1_orig, w1_orig])
-            print(f"Matching scale img0:{scale0:.2f} img1:{scale1:.2f} took {time.time() - t_match:.2f}s")
-        print(f"Finished all img1 scales for img0 scale {scale0:.2f} in {time.time() - t0_scale0:.2f}s")
+        print(f"Completed matching scale {scale:.2f}")
 
     return torch.tensor(all_hw_pairs, dtype=torch.int32)
 
@@ -122,7 +109,16 @@ if __name__ == "__main__":
     if img0 is None or img1 is None:
         raise FileNotFoundError("One of the input images could not be loaded.")
 
-    hw_pairs = match_two_multiscale(img0, img1, scales=[1.0, 0.75, 0.5], top_k=200)
+    # Downscale and grayscale for VM safety
+    img0 = cv.resize(img0, (320, 240))
+    img0 = cv.cvtColor(img0, cv.COLOR_BGR2GRAY)
+    img1 = cv.resize(img1, (320, 240))
+    img1 = cv.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+
+    # Create pyramid for img1
+    pyramid = create_image_pyramid(img1, scales=[1.0, 0.75, 0.5])
+
+    hw_pairs = match_base_to_pyramid(img0, pyramid, top_k=20)
 
     draw_matches(img0, img1, hw_pairs, output_dir, base0="testimage0", base1="testimage1")
 
