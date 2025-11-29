@@ -3,7 +3,7 @@ import cv2 as cv
 import silk
 import os
 import time
-
+import gc
 # --- Setup device ---
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -114,7 +114,7 @@ if __name__ == "__main__":
 
     # --- Multi-resolution and multi-scale testing ---
     resolutions = [320, 640, 1280]  # reference image resolutions
-    scales = [0.5, 1.0, 1.5, 2.0]  # target image scale variations
+    scales = [0.25, 0.5, 0.75, 1]  # target image scale variations
     all_hw_pairs = []
 
     for res in resolutions:
@@ -130,6 +130,7 @@ if __name__ == "__main__":
                 all_hw_pairs.append(pairs)
             del pairs
             torch.cuda.empty_cache()
+            gc.collect()
 
     hw_pairs = torch.cat(all_hw_pairs, dim=0) if all_hw_pairs else torch.empty((0,5), dtype=torch.int32)
 
