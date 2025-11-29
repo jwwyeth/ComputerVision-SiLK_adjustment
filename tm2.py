@@ -45,9 +45,14 @@ def match_two_multiscale(img0, img1, scales=[1.0, 0.75, 0.5], top_k=200):
     all_hw_pairs = []
 
     for gray0, scale0 in pyramid0:
-        img0_tensor = silk.utils.img_to_tensor(gray0, device=device, normalization=True).unsqueeze(0)
+        img0_tensor = silk.utils.img_to_tensor(gray0, device=device, normalization=True)
+        if img0_tensor.ndim == 3:  # [C, H, W]
+            img0_tensor = img0_tensor.unsqueeze(0)  # [1, C, H, W]
+
         for gray1, scale1 in pyramid1:
-            img1_tensor = silk.utils.img_to_tensor(gray1, device=device, normalization=True).unsqueeze(0)
+            img1_tensor = silk.utils.img_to_tensor(gray1, device=device, normalization=True)
+            if img1_tensor.ndim == 3:
+                img1_tensor = img1_tensor.unsqueeze(0)
 
             topk_kpts0, topk_desc0, topk_indice0 = get_topk(*model.forward(img0_tensor), k=top_k)
             topk_kpts1, topk_desc1, topk_indice1 = get_topk(*model.forward(img1_tensor), k=top_k)
@@ -96,8 +101,8 @@ if __name__ == "__main__":
     start_time = time.time()
 
     base_dir = "/home/jack/Desktop/archive"
-    img0_path = os.path.join(base_dir, "test_image0.jpg")
-    img1_path = os.path.join(base_dir, "test_image1.jpg")
+    img0_path = os.path.join(base_dir, "testimage0.jpg")
+    img1_path = os.path.join(base_dir, "testimage1.jpg")
     output_dir = os.path.join(base_dir, "matches_found")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -108,7 +113,7 @@ if __name__ == "__main__":
 
     hw_pairs = match_two_multiscale(img0, img1, scales=[1.0, 0.75, 0.5], top_k=200)
 
-    draw_matches(img0, img1, hw_pairs, output_dir, base0="test_image0", base1="test_image1")
+    draw_matches(img0, img1, hw_pairs, output_dir, base0="testimage0", base1="testimage1")
 
     elapsed = time.time() - start_time
     m, s = divmod(int(elapsed), 60)
