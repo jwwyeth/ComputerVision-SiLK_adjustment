@@ -2,7 +2,6 @@ import torch
 import cv2 as cv
 import silk
 import os
-import numpy as np
 import time
 
 # --- Setup device ---
@@ -15,20 +14,21 @@ model = model.to(device)
 model.train(False)
 model.load_state_dict(torch.load("./train0_25000.pth"))
 
-# --- Keypoint extraction ---
+# --- Extract top-k keypoints ---
 def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=100):
-    """Extract top-k keypoints and their descriptors from a SiLK forward pass."""
-    height, width = ktps.shape[2:4]
-    kpts_map = torch.sigmoid(ktps).squeeze(0).squeeze(0)  # [H, W]
-    kpts_map = kpts_map.reshape(height * width)
-    desc_map = desc.squeeze(0).reshape(desc.shape[1], height * width)
+    """Extract top-k keypoints and descriptors from SiLK output."""
+    if ktps.ndim == 5:  # adjust for extra batch dim
+        ktps = ktps.squeeze(0)
+        desc = desc.squeeze(0)
+    height, width = ktps.shape[1:3]
+    kpts_map = torch.sigmoid(ktps).reshape(height * width)
+    desc_map = desc.reshape(desc.shape[0], height * width)
     topk_value, topk_indice = kpts_map.topk(k)
     topk_desc = desc_map[:, topk_indice]
     return topk_value, topk_desc, topk_indice
 
-# --- Multi-scale image pyramid ---
+# --- Create multi-scale image pyramid ---
 def create_image_pyramid(img, scales=[1.0, 0.75, 0.5]):
-    """Return list of grayscale images at different scales."""
     pyramid = []
     for scale in scales:
         h, w = img.shape[:2]
@@ -38,12 +38,10 @@ def create_image_pyramid(img, scales=[1.0, 0.75, 0.5]):
         pyramid.append((gray, scale))
     return pyramid
 
-# --- Match two images ---
+# --- Multi-scale matching ---
 def match_two_multiscale(img0, img1, scales=[1.0, 0.75, 0.5], top_k=200):
-    """Compute matches between two images using multi-scale SiLK."""
     pyramid0 = create_image_pyramid(img0, scales)
     pyramid1 = create_image_pyramid(img1, scales)
-
     all_hw_pairs = []
 
     for gray0, scale0 in pyramid0:
@@ -64,17 +62,20 @@ def match_two_multiscale(img0, img1, scales=[1.0, 0.75, 0.5], top_k=200):
             sim_mat = torch.matmul(topk_desc0, topk_desc1.T)
             sim_max, sim_indice = torch.max(sim_mat, dim=1)
 
-            height0, width0 = gray0.shape
-            height1, width1 = gray1.shape
+            h0_dim, w0_dim = gray0.shape
+            h1_dim, w1_dim = gray1.shape
 
             for i in range(top_k):
                 if sim_max[i] < 0.7:
                     continue
                 j = sim_indice[i].item()
-                h0, w0 = topk_indice0[i] // width0, topk_indice0[i] % width0
-                h1, w1 = topk_indice1[j] // width1, topk_indice1[j] % width1
-                h0_orig, w0_orig = int(h0 / scale0), int(w0 / scale0)
-                h1_orig, w1_orig = int(h1 / scale1), int(w1 / scale1)
+                h0, w0 = topk_indice0[i] // w0_dim, topk_indice0[i] % w0_dim
+                h1, w1 = topk_indice1[j] // w1_dim, topk_indice1[j] % w1_dim
+                # Map back to original image resolution
+                h0_orig = int(h0 / scale0)
+                w0_orig = int(w0 / scale0)
+                h1_orig = int(h1 / scale1)
+                w1_orig = int(w1 / scale1)
                 all_hw_pairs.append([int(sim_max[i]*1000), h0_orig, w0_orig, h1_orig, w1_orig])
 
     return torch.tensor(all_hw_pairs, dtype=torch.int32)
@@ -107,7 +108,7 @@ if __name__ == "__main__":
 
     hw_pairs = match_two_multiscale(img0, img1, scales=[1.0, 0.75, 0.5], top_k=200)
 
-    draw_matches(img0, img1, hw_pairs, output_dir, base0="img0", base1="img1")
+    draw_matches(img0, img1, hw_pairs, output_dir, base0="test_image0", base1="test_image1")
 
     elapsed = time.time() - start_time
     m, s = divmod(int(elapsed), 60)
