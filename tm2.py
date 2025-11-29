@@ -19,69 +19,63 @@ def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=20):
     if ktps.ndim == 5:
         ktps = ktps.squeeze(0)
         desc = desc.squeeze(0)
-    height, width = ktps.shape[-2:]  # last 2 dims
-    kpts_map = torch.sigmoid(ktps).reshape(-1)  # flatten all pixels
+    height, width = ktps.shape[-2:]
+    kpts_map = torch.sigmoid(ktps).reshape(-1)
     desc_map = desc.reshape(desc.shape[0], -1)
     topk_value, topk_indice = kpts_map.topk(k)
     topk_desc = desc_map[:, topk_indice]
     return topk_value, topk_desc, topk_indice
 
-# --- Create image pyramid for img1 only ---
-def create_image_pyramid(img, scales=[1.0]):
-    pyramid = []
-    for scale in scales:
-        if scale == 1.0:
-            gray = img.copy()
-        else:
-            h, w = img.shape[:2]
-            new_h, new_w = int(h * scale), int(w * scale)
-            resized = cv.resize(img, (new_w, new_h))
-            gray = resized
-        if gray.ndim == 3 and gray.shape[2] == 3:
-            gray = cv.cvtColor(gray, cv.COLOR_BGR2GRAY)
-        pyramid.append((gray, scale))
-    return pyramid
+# --- Convert to grayscale safely ---
+def to_gray(img):
+    if img.ndim == 3 and img.shape[2] == 3:
+        return cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    return img
 
-# --- Match base image to pyramid of img1 ---
-def match_base_to_pyramid(base_img, img_pyramid, top_k=20):
-    all_hw_pairs = []
+# --- Match base image to a scaled version of img1 ---
+def match_base_to_scaled(base_img, target_img, scale=1.0, top_k=20):
+    # Downscale target image
+    if scale != 1.0:
+        h, w = target_img.shape[:2]
+        new_h, new_w = int(h * scale), int(w * scale)
+        target_img_scaled = cv.resize(target_img, (new_w, new_h))
+    else:
+        target_img_scaled = target_img.copy()
 
     base_tensor = silk.utils.img_to_tensor(base_img, device=device, normalization=True)
     if base_tensor.ndim == 3:
         base_tensor = base_tensor.unsqueeze(0)
-    print("Forward pass on base image...")
-    base_kpts, base_desc, base_indice = get_topk(*model.forward(base_tensor), k=top_k)
-    print("Base forward pass done")
+    target_tensor = silk.utils.img_to_tensor(target_img_scaled, device=device, normalization=True)
+    if target_tensor.ndim == 3:
+        target_tensor = target_tensor.unsqueeze(0)
 
+    # Forward pass
+    base_kpts, base_desc, base_indice = get_topk(*model.forward(base_tensor), k=top_k)
+    target_kpts, target_desc, target_indice = get_topk(*model.forward(target_tensor), k=top_k)
+
+    # Normalize descriptors
     base_desc = base_desc.permute(1, 0)
     base_desc = base_desc / torch.norm(base_desc, p=2, dim=1, keepdim=True)
+    target_desc = target_desc.permute(1, 0)
+    target_desc = target_desc / torch.norm(target_desc, p=2, dim=1, keepdim=True)
+
     h0_dim, w0_dim = base_img.shape[:2]
+    h1_dim, w1_dim = target_img_scaled.shape[:2]
 
-    for gray, scale in img_pyramid:
-        print(f"Processing pyramid scale {scale:.2f}")
-        img_tensor = silk.utils.img_to_tensor(gray, device=device, normalization=True)
-        if img_tensor.ndim == 3:
-            img_tensor = img_tensor.unsqueeze(0)
+    # Similarity and matching
+    sim_mat = torch.matmul(base_desc, target_desc.T)
+    sim_max, sim_indice = torch.max(sim_mat, dim=1)
 
-        topk_kpts, topk_desc, topk_indice = get_topk(*model.forward(img_tensor), k=top_k)
-        topk_desc = topk_desc.permute(1, 0)
-        topk_desc = topk_desc / torch.norm(topk_desc, p=2, dim=1, keepdim=True)
-        h1_dim, w1_dim = gray.shape[:2]
-
-        sim_mat = torch.matmul(base_desc, topk_desc.T)
-        sim_max, sim_indice = torch.max(sim_mat, dim=1)
-
-        for i in range(top_k):
-            if sim_max[i] < 0.7:
-                continue
-            j = sim_indice[i].item()
-            h0, w0 = base_indice[i] // w0_dim, base_indice[i] % w0_dim
-            h1, w1 = topk_indice[j] // w1_dim, topk_indice[j] % w1_dim
-            h1_orig = int(h1 / scale)
-            w1_orig = int(w1 / scale)
-            all_hw_pairs.append([int(sim_max[i]*1000), h0, w0, h1_orig, w1_orig])
-
-        print(f"Completed matching scale {scale:.2f}")
+    all_hw_pairs = []
+    for i in range(top_k):
+        if sim_max[i] < 0.7:
+            continue
+        j = sim_indice[i].item()
+        h0, w0 = base_indice[i] // w0_dim, base_indice[i] % w0_dim
+        h1, w1 = target_indice[j] // w1_dim, target_indice[j] % w1_dim
+        h1_orig = int(h1 / scale)
+        w1_orig = int(w1 / scale)
+        all_hw_pairs.append([int(sim_max[i]*1000), h0, w0, h1_orig, w1_orig])
 
     return torch.tensor(all_hw_pairs, dtype=torch.int32)
 
@@ -111,16 +105,31 @@ if __name__ == "__main__":
     if img0 is None or img1 is None:
         raise FileNotFoundError("One of the input images could not be loaded.")
 
-    # Convert to grayscale if necessary
-    if img0.ndim == 3 and img0.shape[2] == 3:
-        img0 = cv.cvtColor(img0, cv.COLOR_BGR2GRAY)
-    if img1.ndim == 3 and img1.shape[2] == 3:
-        img1 = cv.cvtColor(img1, cv.COLOR_BGR2GRAY)
+    # --- Downscale images for CPU ---
+    max_dim = 640  # max width or height
+    h0, w0 = img0.shape[:2]
+    scale0 = min(max_dim / h0, max_dim / w0, 1.0)
+    img0 = cv.resize(img0, (int(w0 * scale0), int(h0 * scale0)))
 
-    # Create pyramid for img1
-    pyramid = create_image_pyramid(img1, scales=[1.0, 0.75, 0.5])
+    h1, w1 = img1.shape[:2]
+    scale1 = min(max_dim / h1, max_dim / w1, 1.0)
+    img1 = cv.resize(img1, (int(w1 * scale1), int(h1 * scale1)))
 
-    hw_pairs = match_base_to_pyramid(img0, pyramid, top_k=20)
+    # Convert to grayscale if needed
+    img0 = to_gray(img0)
+    img1 = to_gray(img1)
+
+    # Process one scale at a time
+    scales = [1.0, 0.75, 0.5]
+    all_hw_pairs = []
+    for scale in scales:
+        print(f"Matching scale {scale}")
+        pairs = match_base_to_scaled(img0, img1, scale=scale, top_k=20)
+        all_hw_pairs.append(pairs)
+        del pairs
+        torch.cuda.empty_cache()
+
+    hw_pairs = torch.cat(all_hw_pairs, dim=0) if all_hw_pairs else torch.empty((0,5), dtype=torch.int32)
 
     draw_matches(img0, img1, hw_pairs, output_dir, base0="testimage0", base1="testimage1")
 
