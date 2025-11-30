@@ -1,8 +1,8 @@
 import torch
 import cv2 as cv
-import numpy as np
 import silk
 import os
+import time
 
 # --- Device setup ---
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -39,7 +39,7 @@ def match_two(img0_tensor: torch.Tensor, img1_tensor: torch.Tensor, sim_thresh=0
     sim_max, sim_indice = torch.max(sim_mat, dim=1)
 
     hw_pairs = []
-    sim_scores = []
+    sim_values = []
 
     for i in range(K):
         if sim_max[i] < sim_thresh:
@@ -52,9 +52,10 @@ def match_two(img0_tensor: torch.Tensor, img1_tensor: torch.Tensor, sim_thresh=0
             topk_indice1[j] // width,
             topk_indice1[j] % width,
         ])
-        sim_scores.append(sim_max[i].item())
+        sim_values.append(sim_max[i].item())
 
-    return torch.tensor(hw_pairs, dtype=torch.int32), sim_scores
+    mean_similarity = sum(sim_values)/len(sim_values) if sim_values else 0
+    return torch.tensor(hw_pairs, dtype=torch.int32), mean_similarity
 
 def prep_image_tensor(img_path, resize_shape=None):
     img = cv.imread(img_path)
@@ -81,32 +82,26 @@ def draw_matches(img0, img1, hw_pairs, output_dir, base0="img0", base1="img1"):
     print(f"Saved matched images to {output_dir}")
 
 # --- Main ---
-img0_path = "/home/jack/Desktop/testimage0.jpg"
-img1_path = "/home/jack/Desktop/testimage1.jpg"
+img0_path = "/home/jack/Desktop/archive/testimage0.jpg"
+img1_path = "/home/jack/Desktop/archive/testimage1_ud.jpg"
 output_dir = "/home/jack/Desktop/matches_found"
+
+start_time = time.time()
 
 img0, img0_tensor = prep_image_tensor(img0_path)
 img1, img1_tensor = prep_image_tensor(img1_path)
 
-hw_pairs, sim_scores = match_two(img0_tensor, img1_tensor)
+hw_pairs, mean_similarity = match_two(img0_tensor, img1_tensor)
 
 num_matches = len(hw_pairs)
-matching_score = sum([score for score, _,_,_,_ in hw_pairs])/1000 / num_matches if num_matches > 0 else 0
-mean_similarity = np.mean(sim_scores) if sim_scores else 0.0
+matching_score = sum([score for score, _, _, _, _ in hw_pairs])/1000 / num_matches if num_matches > 0 else 0
+
+elapsed = time.time() - start_time
+m, s = divmod(int(elapsed), 60)
 
 print(f"Number of matches: {num_matches}")
 print(f"Matching score: {matching_score:.3f}")
 print(f"Mean similarity: {mean_similarity:.3f}")
+print(f"Computation time: {m} min {s} sec")
 
-# Histogram of similarity scores
-import matplotlib.pyplot as plt
-if sim_scores:
-    plt.hist(sim_scores, bins=20, range=(0.7,1.0))
-    plt.title("Histogram of Cosine Similarity Scores")
-    plt.xlabel("Cosine Similarity")
-    plt.ylabel("Count")
-    plt.savefig(os.path.join(output_dir,"similarity_histogram.png"))
-    plt.close()
-    print(f"Saved similarity histogram to {output_dir}")
-
-draw_matches(img0, img1, hw_pairs, output_dir)
+draw_matches(img0, img1, hw_pairs, output_dir, base0="testimage0", base1="testimage1_ud")
