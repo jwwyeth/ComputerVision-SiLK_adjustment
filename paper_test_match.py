@@ -3,21 +3,19 @@ import cv2 as cv
 import numpy as np
 import silk
 import os
-import time
-import matplotlib.pyplot as plt
 
-# --- Setup device ---
+# --- Device setup ---
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# --- Load model ---
+# --- Load SiLK model ---
 model = silk.SiLK()
 model = model.to(device)
-model.train(False)
+model.eval()
 model.load_state_dict(torch.load("./train0_25000.pth"))
 
-# --- Top-k extraction ---
-def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=100):
+# --- Utility functions ---
+def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=200):
     height, width = ktps.shape[2:4]
     kpts_map = torch.sigmoid(ktps).reshape(height*width)
     desc_map = desc.reshape((-1, height*width))
@@ -25,89 +23,90 @@ def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=100):
     topk_desc = desc_map[:, topk_indice]
     return topk_value, topk_desc, topk_indice
 
-# --- Match two images ---
-def match_two(img0: torch.Tensor, img1: torch.Tensor, threshold=0.7, K=200):
-    topk_kpts0, topk_desc0, topk_indice0 = get_topk(*model.forward(img0), k=K)
-    topk_kpts1, topk_desc1, topk_indice1 = get_topk(*model.forward(img1), k=K)
-    topk_desc0 = topk_desc0.permute(1, 0)
-    topk_desc1 = topk_desc1.permute(1, 0)
+def match_two(img0_tensor: torch.Tensor, img1_tensor: torch.Tensor, sim_thresh=0.7):
+    height, width = img0_tensor.shape[2:4]
+    K = 200
+    topk_kpts0, topk_desc0, topk_indice0 = get_topk(*model.forward(img0_tensor), k=K)
+    topk_kpts1, topk_desc1, topk_indice1 = get_topk(*model.forward(img1_tensor), k=K)
+
+    topk_desc0 = topk_desc0.permute(1,0)
+    topk_desc1 = topk_desc1.permute(1,0)
+
     topk_desc0 = topk_desc0 / torch.norm(topk_desc0, p=2, dim=1, keepdim=True)
     topk_desc1 = topk_desc1 / torch.norm(topk_desc1, p=2, dim=1, keepdim=True)
 
     sim_mat = torch.matmul(topk_desc0, topk_desc1.T)
     sim_max, sim_indice = torch.max(sim_mat, dim=1)
 
-    height, width = img0.shape[2:4]
     hw_pairs = []
+    sim_scores = []
+
     for i in range(K):
-        if sim_max[i] < threshold:
+        if sim_max[i] < sim_thresh:
             continue
         j = sim_indice[i].item()
         hw_pairs.append([
-            int(sim_max[i] * 1000),
+            int(sim_max[i]*1000),
             topk_indice0[i] // width,
             topk_indice0[i] % width,
             topk_indice1[j] // width,
             topk_indice1[j] % width,
         ])
-    return torch.tensor(hw_pairs, dtype=torch.int32)
+        sim_scores.append(sim_max[i].item())
 
-# --- Load and preprocess images ---
-img0 = cv.imread('/home/jack/Desktop/testimage0.jpg')
-img1 = cv.imread('/home/jack/Desktop/testimage1_ud.jpg')
-img0 = cv.resize(img0, (160, 120))
-img1 = cv.resize(img1, (160, 120))
-img0_gray = cv.cvtColor(img0, cv.COLOR_BGR2GRAY)
-img1_gray = cv.cvtColor(img1, cv.COLOR_BGR2GRAY)
+    return torch.tensor(hw_pairs, dtype=torch.int32), sim_scores
 
-img0_tensor = silk.utils.img_to_tensor(img0_gray, device=device, normalization=True)
-img1_tensor = silk.utils.img_to_tensor(img1_gray, device=device, normalization=True)
+def prep_image_tensor(img_path, resize_shape=None):
+    img = cv.imread(img_path)
+    if img is None:
+        raise FileNotFoundError(f"Image not found: {img_path}")
+    if resize_shape is not None:
+        img = cv.resize(img, resize_shape)
+    img_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    tensor = silk.utils.img_to_tensor(img_gray, device=device, normalization=True)
+    return img, tensor
 
-# --- Measure forward pass time ---
-start_time = time.time()
-hw_pairs = match_two(img0_tensor, img1_tensor)
-elapsed_time = time.time() - start_time
-print(f"Forward pass and matching time: {elapsed_time:.2f} seconds")
+def draw_matches(img0, img1, hw_pairs, output_dir, base0="img0", base1="img1"):
+    img0_draw = img0.copy()
+    img1_draw = img1.copy()
+    hw_pairs = hw_pairs.cpu().numpy() if isinstance(hw_pairs, torch.Tensor) else hw_pairs
 
-# --- Metrics ---
-K = 200
-num_matches = hw_pairs.shape[0]
-matching_score = num_matches / K if K > 0 else 0
-mean_similarity = (hw_pairs[:,0].float() / 1000).mean().item() if num_matches > 0 else 0
+    for _, h0, w0, h1, w1 in hw_pairs:
+        cv.circle(img0_draw, (w0, h0), radius=5, color=(0,255,0), thickness=1)
+        cv.circle(img1_draw, (w1, h1), radius=5, color=(0,255,0), thickness=1)
 
-# Approximate repeatability (distance <= 5 pixels)
-threshold = 5
-repeatable_matches = 0
-for _, h0, w0, h1, w1 in hw_pairs:
-    if abs(h0 - h1) <= threshold and abs(w0 - w1) <= threshold:
-        repeatable_matches += 1
-repeatability = repeatable_matches / num_matches if num_matches > 0 else 0
+    os.makedirs(output_dir, exist_ok=True)
+    cv.imwrite(os.path.join(output_dir, f"{base0}_matches.jpg"), img0_draw)
+    cv.imwrite(os.path.join(output_dir, f"{base1}_matches.jpg"), img1_draw)
+    print(f"Saved matched images to {output_dir}")
+
+# --- Main ---
+img0_path = "/home/jack/Desktop/testimage0.jpg"
+img1_path = "/home/jack/Desktop/testimage1.jpg"
+output_dir = "/home/jack/Desktop/matches_found"
+
+img0, img0_tensor = prep_image_tensor(img0_path)
+img1, img1_tensor = prep_image_tensor(img1_path)
+
+hw_pairs, sim_scores = match_two(img0_tensor, img1_tensor)
+
+num_matches = len(hw_pairs)
+matching_score = sum([score for score, _,_,_,_ in hw_pairs])/1000 / num_matches if num_matches > 0 else 0
+mean_similarity = np.mean(sim_scores) if sim_scores else 0.0
 
 print(f"Number of matches: {num_matches}")
 print(f"Matching score: {matching_score:.3f}")
 print(f"Mean similarity: {mean_similarity:.3f}")
-print(f"Repeatability (approx.): {repeatability:.3f}")
 
-# --- Keypoint spatial distribution visualization ---
-if num_matches > 0:
-    h_vals = hw_pairs[:,1].cpu().numpy()
-    w_vals = hw_pairs[:,2].cpu().numpy()
-    plt.hist2d(w_vals, h_vals, bins=(32,32))
-    plt.title("Keypoint spatial distribution")
-    plt.xlabel("Width")
-    plt.ylabel("Height")
-    plt.colorbar(label="Number of keypoints")
-    plt.show()
+# Histogram of similarity scores
+import matplotlib.pyplot as plt
+if sim_scores:
+    plt.hist(sim_scores, bins=20, range=(0.7,1.0))
+    plt.title("Histogram of Cosine Similarity Scores")
+    plt.xlabel("Cosine Similarity")
+    plt.ylabel("Count")
+    plt.savefig(os.path.join(output_dir,"similarity_histogram.png"))
+    plt.close()
+    print(f"Saved similarity histogram to {output_dir}")
 
-# --- Draw matches ---
-output_dir = "matches_found"
-os.makedirs(output_dir, exist_ok=True)
-img0_draw = img0.copy()
-img1_draw = img1.copy()
-for _, h0, w0, h1, w1 in hw_pairs:
-    cv.circle(img0_draw, (w0.item(), h0.item()), radius=5, color=(0, 255, 0), thickness=1)
-    cv.circle(img1_draw, (w1.item(), h1.item()), radius=5, color=(0, 255, 0), thickness=1)
-
-cv.imwrite(os.path.join(output_dir, "img0_matches.jpg"), img0_draw)
-cv.imwrite(os.path.join(output_dir, "img1ud_matches.jpg"), img1_draw)
-print(f"Saved matched images to folder: {output_dir}")
+draw_matches(img0, img1, hw_pairs, output_dir)
