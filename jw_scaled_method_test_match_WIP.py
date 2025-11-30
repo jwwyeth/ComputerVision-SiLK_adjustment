@@ -15,7 +15,7 @@ model.train(False)
 model.load_state_dict(torch.load("./train0_25000.pth"))
 
 # --- Extract top-k keypoints ---
-def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=20):
+def get_topk(ktps: torch.Tensor, desc: torch.Tensor, k=100):
     if ktps.ndim == 5:
         ktps = ktps.squeeze(0)
         desc = desc.squeeze(0)
@@ -44,7 +44,7 @@ def prep_image_tensor(img):
     return tensor.to(device)
 
 # --- Match base image to a scaled version of img1 ---
-def match_base_to_scaled(base_img, target_img, scale=1.0, top_k=20):
+def match_base_to_scaled(base_img, target_img, scale=1.0, top_k=100):
     # Downscale target image
     if scale != 1.0:
         h, w = target_img.shape[:2]
@@ -90,9 +90,11 @@ def match_base_to_scaled(base_img, target_img, scale=1.0, top_k=20):
 def draw_matches(img0, img1, hw_pairs, output_dir, base0="img0", base1="img1"):
     img0_draw = img0.copy()
     img1_draw = img1.copy()
+    hw_pairs = hw_pairs.cpu().numpy() if isinstance(hw_pairs, torch.Tensor) else hw_pairs
+
     for score, h0, w0, h1, w1 in hw_pairs:
-        cv.circle(img0_draw, (w0, h0), radius=5, color=(0, 255, 0), thickness=1)
-        cv.circle(img1_draw, (w1, h1), radius=5, color=(0, 255, 0), thickness=1)
+        cv.circle(img0_draw, (int(w0), int(h0)), radius=5, color=(0, 255, 0), thickness=1)
+        cv.circle(img1_draw, (int(w1), int(h1)), radius=5, color=(0, 255, 0), thickness=1)
     cv.imwrite(os.path.join(output_dir, f"{base0}_matches.jpg"), img0_draw)
     cv.imwrite(os.path.join(output_dir, f"{base1}_matches.jpg"), img1_draw)
     print(f"Saved matches to {output_dir}")
@@ -125,7 +127,7 @@ if __name__ == "__main__":
 
         for scale in scales:
             print(f"Matching resolution {res} with scale {scale}")
-            pairs = match_base_to_scaled(img0_res, img1, scale=scale, top_k=20)
+            pairs = match_base_to_scaled(img0_res, img1, scale=scale, top_k=100)
             if pairs.numel() > 0:
                 all_hw_pairs.append(pairs)
             del pairs
