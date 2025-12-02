@@ -9,7 +9,7 @@ https://www.kaggle.com/datasets/trungit/coco25k
 
 ## How to Run
 
-Before running this, ensure that you have the correct scale that you want to test for changed and that you have your images in the images_test folder.
+Before running this, ensure that you have the correct scale that you want to test for is changed and that you have your images in the images folder.
 
 ```
 pip install torch opencv-python numpy
