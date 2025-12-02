@@ -51,8 +51,8 @@ def match_two(img0: torch.Tensor, img1: torch.Tensor, threshold=0.7, K=200):
     return torch.tensor(hw_pairs, dtype=torch.int32)
 
 # --- Load and preprocess images ---
-img0_path = "/home/jack/Desktop/archive/testimage0.jpg"
-img1_path = "/home/jack/Desktop/archive/testimage1_ud.jpg"
+img0_path = "PATH OF BASE IMAGE GOES HERE"
+img1_path = "PATH OF TARGET IMAGE GOES HERE"
 img0 = cv.imread(img0_path)
 img1 = cv.imread(img1_path)
 img0 = cv.resize(img0, (160, 120))
@@ -80,7 +80,7 @@ print(f"Mean similarity: {mean_similarity:.3f}")
 print(f"Total computation time: {elapsed_time:.2f} seconds")
 
 # --- Draw matches ---
-output_dir = "/home/jack/Desktop/matches_found"
+output_dir = "PATH TO OUTPUT FOLDER GOES HERE"
 os.makedirs(output_dir, exist_ok=True)
 img0_draw = img0.copy()
 img1_draw = img1.copy()
