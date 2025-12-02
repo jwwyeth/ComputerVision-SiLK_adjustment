@@ -61,15 +61,15 @@ def match_two(img0_t: torch.Tensor, img1_t: torch.Tensor, threshold=0.7, K=200):
     return torch.tensor(hw_pairs, dtype=torch.int32), matched_sims
 
 # --- Load and Scale Images ---
-base_dir = os.path.join("..", "archive")
-images_dir = os.path.join(base_dir, "images_test")
+base_dir = os.path.dirname(os.path.abspath(__file__))
+images_dir = os.path.join(base_dir, "images")
 output_dir = os.path.join(base_dir, "match_test")
 os.makedirs(output_dir, exist_ok=True)
 
 image_paths = []
 for f in os.listdir(images_dir):
     if f.endswith(".jpg"):
-        full = os.path.join(base_dir, f"images_test/{f}")
+        full = os.path.join(base_dir, f"images/{f}")
         image_paths.append(os.path.abspath(full))
 
 for img_path in image_paths:
@@ -89,7 +89,7 @@ for img_path in image_paths:
     img0 = original_img.copy()
 
     # Prepare Image 1 (scaled)
-    scale_factor = 0.5
+    scale_factor = 0.5 # ---------------- CHANGE ----------------
     new_width = int(img0.shape[1] * scale_factor)
     new_height = int(img0.shape[0] * scale_factor)
     img1 = cv.resize(img0, (new_width, new_height))
